@@ -18,7 +18,7 @@ For questions about current events, technologies, or any topic you're unsure abo
 ## Tool reference
 
 ### Web & Information
-- **web_search** — Search the web for current information via Tavily (AI-native search engine). Set TAVILY_API_KEY in .env.local for live results. Falls back to curated knowledge base when no key is set.
+- **web_search** — Search the web for current information via Cencori's first-party web index (own crawler, corpus, embeddings, ranking — not a third-party API). Uses the CENCORI_API_KEY already in .env.local; no separate search key needed.
 - **fetch_url** — Fetch one or more URLs and return readable text. Follows redirects, strips HTML. Use after web_search to get full article content.
 - **search_docs** — Search arcie/Cencori documentation for platform, API, and configuration questions.
 

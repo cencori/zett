@@ -30,7 +30,7 @@ interface ToolEntry {
 }
 
 const AVAILABLE_TOOLS: ToolEntry[] = [
-  { id: "web_search", label: "web_search", description: "Web search via Tavily (set TAVILY_API_KEY, free tier: 1000 queries/mo)", files: ["agent/tools/web_search.ts"] },
+  { id: "web_search", label: "web_search", description: "Web search via Cencori's first-party index (uses CENCORI_API_KEY, no extra key needed)", files: ["agent/tools/web_search.ts"] },
   { id: "fetch_url", label: "fetch_url", description: "Fetch one or more URLs and extract readable text", files: ["agent/tools/fetch_url.ts"] },
   { id: "calculator", label: "calculator", description: "Math expressions, unit conversions, trigonometry", files: ["agent/tools/calculator.ts"] },
   { id: "current_time", label: "current_time", description: "Current date/time for any IANA timezone", files: ["agent/tools/current_time.ts"] },
@@ -344,7 +344,7 @@ async function runInit(
   }
 
   // Tell the user about .env.local — they add their own API keys.
-  prompter.log.info(`Edit .env.local to add your API keys (CENCORI_API_KEY, TAVILY_API_KEY, etc.)`);
+  prompter.log.info(`Edit .env.local to add your API keys (CENCORI_API_KEY, etc.)`);
 
   // Load .env.local so devCommand starts with the vars already in process.env.
   loadEnvFile(join(targetDir, ".env.local"));

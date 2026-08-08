@@ -1,133 +1,97 @@
 import { defineTool } from "arcie";
 import { z } from "zod";
 
+// Cencori's first-party web index — the same API the official @cencori/mcp
+// server calls. No third-party search key needed: CENCORI_API_KEY is all it
+// takes. Handles CENCORI_API_URL being set to either https://cencori.com
+// or the legacy https://cencori.com/api/v1 form.
+const BASE = (process.env.CENCORI_API_URL ?? "https://cencori.com")
+  .replace(/\/api\/v1\/?$/, "")
+  .replace(/\/+$/, "");
+
 export default defineTool({
   description:
-    "Search the web for current information. Uses Tavily — an AI-native search engine optimized for LLMs. Returns clean, relevant results with content snippets and source URLs. Call fetch_url on any result to get the full page content.",
+    "Search the web for current information. Uses Cencori's first-party web index (own crawler, corpus, embeddings, and ranking — not a third-party API). Returns ranked results with evidence quotes and source URLs. Call fetch_url on any result to get the full page content.",
   inputSchema: z.object({
-    query: z.string().describe("The search query — be specific for best results"),
-    maxResults: z.number().optional().default(5).describe("Maximum number of results to return (1-10)"),
-    includeContent: z.boolean().optional().default(true).describe("Include cleaned page content in results"),
+    query: z.string().describe("Natural-language web search query — be specific for best results"),
+    limit: z.number().int().min(1).max(50).optional().default(5).describe("Maximum number of results to return (1-50)"),
+    domain: z.string().optional().describe("Restrict results to one hostname, e.g. docs.cencori.com"),
+    freshness: z.string().optional().describe("Recency filter: an ISO timestamp or a relative duration such as 24h, 7d, or 3m"),
   }),
-  execute: async ({ query, maxResults, includeContent }) => {
-    const apiKey = process.env.TAVILY_API_KEY;
-    const max = maxResults ?? 5;
+  execute: async ({ query, limit, domain, freshness }) => {
+    const apiKey = process.env.CENCORI_API_KEY;
 
     if (!apiKey) {
-      return fallbackSearch(query, max);
+      return {
+        engine: "cencori",
+        query,
+        count: 0,
+        error: "CENCORI_API_KEY is not set",
+        results: [],
+        note: "Set CENCORI_API_KEY in .env.local to enable live web search.",
+      };
     }
 
     try {
-      const res = await fetch("https://api.tavily.com/search", {
+      const res = await fetch(`${BASE}/api/v1/web/search`, {
         method: "POST",
-        signal: AbortSignal.timeout(10_000),
-        headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(15_000),
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          api_key: apiKey,
           query,
-          max_results: Math.min(max, 10),
-          include_answer: true,
-          include_raw_content: false,
-          include_domains: [],
-          exclude_domains: [],
+          limit: limit ?? 5,
+          ...(domain ? { domain } : {}),
+          ...(freshness ? { freshness } : {}),
         }),
       });
 
       if (!res.ok) {
         const text = await res.text();
         return {
-          engine: "tavily",
+          engine: "cencori",
           query,
-          error: `Tavily API error (${res.status}): ${text}`,
+          count: 0,
+          error: `Cencori Web API error (${res.status}): ${text}`,
           results: [],
-          note: "Set a valid TAVILY_API_KEY in .env.local.",
+          note: "Check that CENCORI_API_KEY is valid and has web access enabled.",
         };
       }
 
       const data = (await res.json()) as {
         answer?: string;
-        results?: Array<{
-          title: string;
-          url: string;
-          content: string;
-          score: number;
-        }>;
+        results?: unknown[];
       };
-
-      const results = (data.results ?? []).slice(0, max).map((r) => ({
-        title: r.title,
-        snippet: includeContent ? r.content : r.content.slice(0, 300),
-        url: r.url,
-        score: r.score,
-      }));
+      const raw = Array.isArray(data.results) ? data.results : Array.isArray(data) ? data : [];
+      const results = raw.slice(0, limit ?? 5).map((item) => {
+        const r = item as Record<string, unknown>;
+        return {
+          title: typeof r.title === "string" ? r.title : (typeof r.name === "string" ? r.name : "Untitled"),
+          url: typeof r.url === "string" ? r.url : (typeof r.link === "string" ? r.link : ""),
+          snippet: typeof r.snippet === "string"
+            ? r.snippet
+            : (typeof r.content === "string"
+              ? r.content
+              : (typeof r.text === "string" ? r.text : (typeof r.evidence_quote === "string" ? r.evidence_quote : ""))),
+          score: typeof r.score === "number" ? r.score : undefined,
+        };
+      });
 
       return {
-        engine: "tavily",
+        engine: "cencori",
         query,
         count: results.length,
-        answer: data.answer,
+        ...(typeof data.answer === "string" ? { answer: data.answer } : {}),
         results,
       };
     } catch (err) {
       return {
-        engine: "tavily",
+        engine: "cencori",
         query,
+        count: 0,
         error: err instanceof Error ? err.message : "Search failed",
         results: [],
-        note: "Tavily API unreachable. Check your network connection.",
+        note: "Cencori Web API unreachable. Check your network connection.",
       };
     }
   },
 });
-
-function fallbackSearch(query: string, maxResults: number) {
-  const topics = curatedKnowledge();
-  const normalized = query.toLowerCase();
-  const matches = topics
-    .filter((t) => t.title.toLowerCase().includes(normalized) || t.content.toLowerCase().includes(normalized))
-    .slice(0, maxResults);
-
-  return {
-    engine: "curated",
-    query,
-    count: matches.length,
-    answer: matches.length > 0 ? undefined : `No curated information found for "${query}".`,
-    results: matches.length > 0
-      ? matches.map((m) => ({ title: m.title, snippet: m.content, url: "" }))
-      : [{ title: "No results", snippet: `Set TAVILY_API_KEY in .env.local for live web search, or try a different query.`, url: "" }],
-    note: "Using curated knowledge base. Set TAVILY_API_KEY in .env.local for live web results.",
-  };
-}
-
-function curatedKnowledge(): Array<{ title: string; content: string }> {
-  return [
-    { title: "TypeScript", content: "Typed superset of JavaScript by Microsoft. Adds static types, interfaces, generics." },
-    { title: "Python", content: "High-level interpreted language by Guido van Rossum (1991). Popular for data science, web dev, automation." },
-    { title: "React", content: "UI library by Meta (2013). Component-based, virtual DOM. Most popular frontend framework." },
-    { title: "Next.js", content: "React framework by Vercel. SSR, SSG, API routes, file-system routing." },
-    { title: "Node.js", content: "JavaScript runtime on V8 by Ryan Dahl (2009). Event-driven, non-blocking I/O." },
-    { title: "Rust", content: "Systems language by Mozilla (2015). Memory-safe, zero-cost abstractions, no GC." },
-    { title: "PostgreSQL", content: "Open-source relational DB (1996). ACID, JSON, full-text search, extensible." },
-    { title: "Docker", content: "Container platform (2013). Package apps with dependencies for consistent deployment." },
-    { title: "Kubernetes", content: "Container orchestration by Google (2014). Auto deploys, scales, manages containers." },
-    { title: "GraphQL", content: "API query language by Meta (2015). Clients request exact data needed, no over-fetching." },
-    { title: "Machine Learning", content: "AI subset where systems learn from data. Types: supervised, unsupervised, reinforcement learning." },
-    { title: "Linux", content: "Open-source OS kernel by Linus Torvalds (1991). Powers most servers, Android, cloud infrastructure." },
-    { title: "Git", content: "Distributed version control by Linus Torvalds (2005). Branching, merging, staging area." },
-    { title: "SQL", content: "Structured Query Language for relational databases. Declarative, set-based operations on tables." },
-    { title: "REST API", content: "Representational State Transfer. HTTP methods (GET, POST, PUT, DELETE) on resources as JSON/XML." },
-    { title: "JSON", content: "JavaScript Object Notation. Lightweight data interchange format. Language-independent." },
-    { title: "WebSocket", content: "Full-duplex communication protocol over TCP. Real-time apps: chat, games, live updates." },
-    { title: "OAuth 2.0", content: "Authorization framework. Token-based access delegation for APIs." },
-    { title: "JWT", content: "JSON Web Token. Compact, self-contained token format for transmitting claims between parties." },
-    { title: "HTTPS", content: "HTTP over TLS/SSL. Encrypted communication between browser and server." },
-    { title: "Docker Compose", content: "Tool for defining and running multi-container Docker apps with a YAML file." },
-    { title: "CI/CD", content: "Continuous Integration and Continuous Deployment. Automate building, testing, deploying." },
-    { title: "Microservices", content: "Architectural style where apps are composed of small, independent services over networks." },
-    { title: "Serverless", content: "Cloud execution model where provider manages servers. Pay-per-execution. AWS Lambda." },
-    { title: "Edge Computing", content: "Processing data near source rather than centralized data centers. Low latency." },
-    { title: "WebAssembly", content: "Binary instruction format for stack-based VMs. Runs near-native speed in browsers." },
-    { title: "Arcie", content: "Production-grade agent framework. Filesystem-first: agents in agent/ dir. Tools, subagents, hooks, memory, policies, MCP." },
-    { title: "Cencori", content: "Cloud gateway for AI model inference. Routes to OpenAI, Anthropic, Groq, DeepSeek, Mistral, Google, Meta models." },
-  ];
-}
