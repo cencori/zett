@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { AlertTriangle } from "lucide-react";
 import { InputBar } from "./input-bar";
 import { Message } from "./message";
 import { readArcieStream } from "../lib/stream";
@@ -66,6 +67,8 @@ export interface ChatProps {
   endpoint?: string;
   /** Optional URL returning the agent list (for the selector). When absent, the selector is hidden. */
   agentsEndpoint?: string;
+  /** URL synthesizing speech for the speak button. When absent, the button is hidden. */
+  speechEndpoint?: string;
   /** Agent id to start on (and send with each turn when not "agent"). */
   initialAgentId?: string;
 }
@@ -73,6 +76,7 @@ export interface ChatProps {
 export function Chat({
   endpoint = "/invoke",
   agentsEndpoint,
+  speechEndpoint,
   initialAgentId = "agent",
 }: ChatProps = {}) {
   const [messages, setMessages] = React.useState<UiMessage[]>([]);
@@ -86,6 +90,10 @@ export function Chat({
   const fileMessageRef = React.useRef<string | undefined>(undefined);
 
   const [pendingFiles, setPendingFiles] = React.useState<UiFile[]>([]);
+  const [micActive, setMicActive] = React.useState(false);
+  const [micError, setMicError] = React.useState<string | undefined>(undefined);
+  const recorderRef = React.useRef<MediaRecorder | undefined>(undefined);
+  const micStreamRef = React.useRef<MediaStream | undefined>(undefined);
 
   React.useEffect(() => {
     const el = containerRef.current;
@@ -367,6 +375,58 @@ export function Chat({
     setPendingFiles((prev) => prev.filter((p) => p.id !== fileId));
   }, []);
 
+  /**
+   * Mic toggle: records via MediaRecorder and drops the result into the
+   * pending-file row like any other attachment, so it flows through the
+   * normal /invoke upload path (the server transcribes it).
+   */
+  const toggleMic = React.useCallback(async () => {
+    if (micActive) {
+      const recorder = recorderRef.current;
+      if (recorder && recorder.state !== "inactive") recorder.stop();
+      micStreamRef.current?.getTracks().forEach((t) => t.stop());
+      return;
+    }
+    setMicError(undefined);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/mp4")
+          ? "audio/mp4"
+          : "";
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      recorder.onstop = () => {
+        micStreamRef.current?.getTracks().forEach((t) => t.stop());
+        micStreamRef.current = undefined;
+        recorderRef.current = undefined;
+        setMicActive(false);
+        const type = mimeType || "audio/webm";
+        const blob = new Blob(chunks, { type });
+        const recorded = new File(
+          [blob],
+          `voice-note.${type.includes("mp4") ? "m4a" : "webm"}`,
+          { type },
+        );
+        onFilesSelected([recorded]);
+      };
+      micStreamRef.current = stream;
+      recorderRef.current = recorder;
+      recorder.start();
+      setMicActive(true);
+    } catch (err) {
+      setMicError(
+        err instanceof DOMException && err.name === "NotAllowedError"
+          ? "Microphone access denied — allow it in your browser settings."
+          : "Microphone unavailable.",
+      );
+    }
+  }, [micActive, onFilesSelected]);
+
   const send = React.useCallback(
     async (text: string, historyOverride?: UiMessage[]) => {
       const base = historyOverride ?? messages;
@@ -478,6 +538,7 @@ export function Chat({
                 key={message.id}
                 message={message}
                 isLast={isLast}
+                speechEndpoint={speechEndpoint}
                 onCopy={copy}
                 onRegenerate={regenerate}
                 onApprove={() => void resolveApprovals(message.id, true)}
@@ -497,7 +558,15 @@ export function Chat({
         pendingFiles={pendingFiles}
         onFilesSelected={onFilesSelected}
         onRemoveFile={removePendingFile}
+        onMic={() => void toggleMic()}
+        micActive={micActive}
       />
+      {micError !== undefined && (
+        <div className="flex items-center justify-center gap-1.5 px-4 pb-3 text-xs text-destructive">
+          <AlertTriangle className="h-3 w-3" />
+          <span>{micError}</span>
+        </div>
+      )}
     </div>
   );
 }

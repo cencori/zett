@@ -3,7 +3,7 @@
 import * as React from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { AlertTriangle, Check, Copy, RotateCcw } from "lucide-react";
+import { AlertTriangle, Check, Copy, RotateCcw, Volume2 } from "lucide-react";
 import { cn } from "../lib/utils";
 import type { UiMessage } from "../lib/types";
 import { parseAssistantOutput } from "../lib/assistant-output";
@@ -15,6 +15,8 @@ import { ActivityPanel } from "./activity-panel";
 interface MessageProps {
   message: UiMessage;
   isLast?: boolean;
+  /** Endpoint synthesizing speech from text. When absent, the speak button is hidden. */
+  speechEndpoint?: string;
   onCopy?(text: string): void;
   onRegenerate?(): void;
   onApprove?(): void;
@@ -26,9 +28,96 @@ interface MarkdownCodeProps {
   children?: React.ReactNode;
 }
 
-export function Message({ message, isLast, onCopy, onRegenerate, onApprove, onDeny }: MessageProps) {
+function UserMessageBubble({ content }: { content: string }) {
+  const textRef = React.useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = React.useState(false);
+  const [canExpand, setCanExpand] = React.useState(false);
+
+  React.useLayoutEffect(() => {
+    const text = textRef.current;
+    if (!text || expanded) return;
+
+    const measureOverflow = () => {
+      setCanExpand(text.scrollHeight > text.clientHeight + 1);
+    };
+
+    measureOverflow();
+    if (typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(measureOverflow);
+    observer.observe(text);
+    return () => observer.disconnect();
+  }, [content, expanded]);
+
+  return (
+    <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-primary px-3.5 py-2 text-primary-foreground shadow-sm">
+      <p
+        ref={textRef}
+        className={cn(
+          "whitespace-pre-wrap text-sm font-medium leading-relaxed",
+          !expanded && "line-clamp-5",
+        )}
+      >
+        {content}
+      </p>
+      {canExpand && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+          className={cn(
+            "mt-1.5 rounded-sm text-[11px] font-semibold text-primary-foreground/60",
+            "transition-colors hover:text-primary-foreground",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-foreground/30 focus-visible:ring-offset-2 focus-visible:ring-offset-primary",
+          )}
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function Message({ message, isLast, speechEndpoint, onCopy, onRegenerate, onApprove, onDeny }: MessageProps) {
   const isUser = message.role === "user";
   const [copied, setCopied] = React.useState(false);
+  const [speaking, setSpeaking] = React.useState(false);
+  const audioRef = React.useRef<HTMLAudioElement | null>(null);
+
+  const speak = async () => {
+    if (speechEndpoint === undefined || visibleContent.length === 0) return;
+    if (speaking) {
+      audioRef.current?.pause();
+      setSpeaking(false);
+      return;
+    }
+    try {
+      const res = await fetch(speechEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input: visibleContent }),
+      });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      setSpeaking(true);
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        audioRef.current = null;
+        setSpeaking(false);
+      };
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        audioRef.current = null;
+        setSpeaking(false);
+      };
+      await audio.play();
+    } catch {
+      setSpeaking(false);
+    }
+  };
 
   const hasToolCalls = (message.toolCalls?.length ?? 0) > 0;
   const parsedOutput = React.useMemo(
@@ -88,11 +177,7 @@ export function Message({ message, isLast, onCopy, onRegenerate, onApprove, onDe
           </div>
         )}
         {message.content.length > 0 && (
-          <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-primary px-3.5 py-2 text-primary-foreground shadow-sm">
-            <p className="text-sm font-medium leading-relaxed whitespace-pre-wrap">
-              {message.content}
-            </p>
-          </div>
+          <UserMessageBubble content={message.content} />
         )}
       </div>
     );
@@ -152,6 +237,21 @@ export function Message({ message, isLast, onCopy, onRegenerate, onApprove, onDe
                 ) : (
                   <Copy className="h-3 w-3" />
                 )}
+              </button>
+            )}
+            {speechEndpoint && (
+              <button
+                type="button"
+                onClick={() => void speak()}
+                className={cn(
+                  "h-6 w-6 flex items-center justify-center rounded transition-colors",
+                  speaking
+                    ? "text-primary"
+                    : "text-muted-foreground/60 hover:text-foreground hover:bg-muted/30",
+                )}
+                title={speaking ? "Stop speaking" : "Speak this response"}
+              >
+                <Volume2 className="h-3 w-3" />
               </button>
             )}
             {isLast && onRegenerate && (

@@ -158,18 +158,98 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(payload);
 }
 
+/** Cencori's STT accepts roughly 25 MB per file; refuse anything bigger. */
+export const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+
+function cencoriBaseUrl(): string {
+  return (
+    (process.env.CENCORI_API_URL ?? "https://cencori.com")
+      .replace(/\/api\/v1\/?$/, "")
+      .replace(/\/+$/, "")
+  );
+}
+
+/** Best-effort extraction of the platform's structured error message. */
+async function readError(res: Response): Promise<string> {
+  try {
+    const data = (await res.json()) as { error?: unknown };
+    // Prefer the human-readable `message`: `error` is often just a code
+    // like "provider_error" while `message` carries the upstream detail.
+    if (typeof data.error === "object" && data.error !== null) {
+      const message = (data.error as { message?: unknown }).message;
+      if (typeof message === "string") return message;
+    }
+    const topLevel = (data as { message?: unknown }).message;
+    if (typeof data.error === "string" && typeof topLevel !== "string" && data.error.length > 0) {
+      return data.error;
+    }
+    if (typeof topLevel === "string") return topLevel;
+  } catch {
+    // not JSON — fall through
+  }
+  return "";
+}
+
+/**
+ * Transcribes an audio attachment through Cencori's first-party STT
+ * (whisper-1). Returns a textual annotation that the model can reason
+ * about — the widget's mic recordings, voice notes, and meeting uploads
+ * all land here instead of the plain file placeholder.
+ */
+async function transcribeAudio(f: InvokeFile): Promise<string> {
+  const apiKey = process.env.CENCORI_API_KEY;
+  if (!apiKey || apiKey === "local-dev-key") {
+    return `[Audio attached: ${f.name} — set CENCORI_API_KEY for transcription]`;
+  }
+
+  const [header, base64] = f.dataUrl.slice(5).split(";base64,");
+  const mimeType = header ?? "audio/mpeg";
+  const bytes = Buffer.from(base64 ?? "", "base64");
+  if (bytes.byteLength > MAX_AUDIO_BYTES) {
+    return `[Audio attached: ${f.name} — too large to transcribe (${(bytes.byteLength / 1048576).toFixed(1)} MB, max 25 MB)]`;
+  }
+
+  try {
+    const form = new FormData();
+    form.append("file", new Blob([bytes], { type: mimeType }), f.name);
+    form.append("model", "whisper-1");
+    form.append("response_format", "json");
+    const res = await fetch(`${cencoriBaseUrl()}/api/ai/audio/transcriptions`, {
+      method: "POST",
+      signal: AbortSignal.timeout(60_000),
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form,
+    });
+    if (!res.ok) {
+      const detail = await readError(res);
+      return `[Audio attached: ${f.name} — transcription failed (${res.status}${detail ? `: ${detail}` : ""})]`;
+    }
+    const data = (await res.json()) as { text?: string };
+    const text = (data.text ?? "").trim();
+    return text.length > 0
+      ? `[Audio transcribed from ${f.name}]\n${text}`
+      : `[Audio attached: ${f.name} — empty transcript]`;
+  } catch {
+    return `[Audio attached: ${f.name} — transcription API unreachable]`;
+  }
+}
+
 /**
  * Best-effort image understanding for uploaded files. Mirrors the behaviour
  * the retired Next.js chat route offered: images are described through
  * Cencori Vision (when a key is present) so a text-only model can reason
- * about them; everything else becomes a short textual placeholder.
+ * about them; audio is transcribed to text; everything else becomes a short
+ * textual placeholder.
  */
-async function describeFiles(files: InvokeFile[]): Promise<string> {
+export async function describeFiles(files: InvokeFile[]): Promise<string> {
   const apiKey = process.env.CENCORI_API_KEY;
-  const base = process.env.CENCORI_API_URL?.replace(/\/api\/v1\/?$/, "") ?? "https://cencori.com";
+  const base = cencoriBaseUrl();
 
   const parts = await Promise.all(
     files.map(async (f) => {
+      if (f.type.startsWith("audio/")) {
+        return transcribeAudio(f);
+      }
       if (!f.type.startsWith("image/")) {
         return `[File attached: ${f.name} — ${(f.dataUrl.length / 1024).toFixed(0)} KB]`;
       }
@@ -403,6 +483,67 @@ export function contractRequestHandler(
     sendJson(res, 200, agents);
   };
 
+  /**
+   * Synthesizes speech from text via Cencori's first-party TTS and returns
+   * the audio bytes. A convenience route for the widget's "speak" button —
+   * deliberately outside the Runtime Contract slots, so the platform can
+   * ignore it while the widget may use it.
+   */
+  const speech = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    let body: { input?: string; voice?: string; format?: string };
+    try {
+      body = JSON.parse(await readBody(req)) as { input?: string; voice?: string; format?: string };
+    } catch {
+      sendJson(res, 400, { error: "invalid JSON body" });
+      return;
+    }
+
+    const input = (body.input ?? "").trim();
+    if (input.length === 0) {
+      sendJson(res, 400, { error: "input is required" });
+      return;
+    }
+
+    const apiKey = process.env.CENCORI_API_KEY;
+    if (!apiKey || apiKey === "local-dev-key") {
+      sendJson(res, 500, { error: "CENCORI_API_KEY is not set — speech synthesis unavailable" });
+      return;
+    }
+
+    try {
+      const tts = await fetch(`${cencoriBaseUrl()}/api/ai/audio/speech`, {
+        method: "POST",
+        signal: AbortSignal.timeout(60_000),
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          input,
+          model: "tts-1",
+          ...(body.voice ? { voice: body.voice } : {}),
+          ...(body.format ? { response_format: body.format } : {}),
+        }),
+      });
+      if (!tts.ok) {
+        const detail = await readError(tts);
+        sendJson(res, 502, { error: `Cencori TTS error (${tts.status}${detail ? `: ${detail}` : ""})` });
+        return;
+      }
+      const audio = Buffer.from(await tts.arrayBuffer());
+      const contentType = tts.headers.get("content-type") ?? "audio/mpeg";
+      res.writeHead(200, {
+        "Content-Type": contentType,
+        "Content-Length": audio.byteLength,
+        "Cache-Control": "no-cache, no-transform",
+      });
+      res.end(audio);
+    } catch (err) {
+      if (!res.headersSent) {
+        sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      } else {
+        res.end();
+      }
+    }
+  };
+
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const method = req.method ?? "GET";
     const rawUrl = req.url ?? "/";
@@ -422,6 +563,12 @@ export function contractRequestHandler(
     // Convenience for the widget's agent selector — not part of the RC.
     if (method === "GET" && pathname === "/_agents") {
       await agentsList(res);
+      return true;
+    }
+
+    // Convenience for the widget's speak button — not part of the RC.
+    if (method === "POST" && pathname === "/speech") {
+      await speech(req, res);
       return true;
     }
 

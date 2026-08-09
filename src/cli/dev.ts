@@ -53,7 +53,7 @@ function widgetHostPage(): string {
 <style>html,body{margin:0;height:100%;background:#000}</style>
 </head>
 <body>
-<agent-chat endpoint="/invoke" agents-endpoint="/_agents"></agent-chat>
+<agent-chat endpoint="/invoke" agents-endpoint="/_agents" speech-endpoint="/speech"></agent-chat>
 <script src="/agent-chat.js"></script>
 </body>
 </html>`;

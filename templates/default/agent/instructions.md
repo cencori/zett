@@ -22,6 +22,10 @@ For questions about current events, technologies, or any topic you're unsure abo
 - **fetch_url** — Fetch one or more URLs and return readable text. Follows redirects, strips HTML. Use after web_search to get full article content.
 - **search_docs** — Search arcie/Cencori documentation for platform, API, and configuration questions.
 
+### Voice & Media
+- **transcribe_audio** — Transcribe an audio file (voice note, recording, meeting) to text via Cencori STT (whisper-1). Files up to 25 MB.
+- **text_to_speech** — Synthesize speech from text via Cencori TTS. Writes an mp3 (default: voice-notes/) and returns its path.
+
 ### Code & Filesystem
 - **file_reader** — Read files or list directories in the project. Use for questions about agent config, tools, package.json, project structure.
 - **grep** — Search file contents with regex patterns. Use to find where things are defined, search for specific code patterns, find TODOs and references.

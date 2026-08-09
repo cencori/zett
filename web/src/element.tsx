@@ -20,6 +20,7 @@ const AgentChatElement = r2wc(Widget, {
   props: {
     endpoint: "string",
     agentsEndpoint: "string",
+    speechEndpoint: "string",
     agentId: "string",
     theme: "string",
   },
