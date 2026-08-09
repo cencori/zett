@@ -22,6 +22,11 @@ interface InputBarProps {
   leftSlot?: React.ReactNode;
   onMic?(): void;
   micActive?: boolean;
+  /** Controlled draft text (the mic's transcript lands here). */
+  value?: string;
+  onValueChange?(value: string): void;
+  /** Bump to move focus to the composer (after a transcription). */
+  focusToken?: number;
 }
 
 export function InputBar({
@@ -37,17 +42,35 @@ export function InputBar({
   leftSlot,
   onMic,
   micActive,
+  value,
+  onValueChange,
+  focusToken,
 }: InputBarProps) {
-  const [value, setValue] = React.useState("");
+  const [internalValue, setInternalValue] = React.useState("");
+  const draft = value ?? internalValue;
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
+  React.useEffect(() => {
+    if (focusToken === undefined || focusToken === 0) return;
+    const el = textareaRef.current;
+    if (!el) return;
+    el.focus();
+    const end = el.value.length;
+    el.setSelectionRange(end, end);
+  }, [focusToken]);
+
+  const setDraft = (next: string) => {
+    if (onValueChange) onValueChange(next);
+    else setInternalValue(next);
+  };
+
   const submit = () => {
-    const trimmed = value.trim();
+    const trimmed = draft.trim();
     if ((trimmed.length === 0 && pendingFiles.length === 0) || streaming || disabled) return;
     if (pendingFiles.some((f) => f.loading)) return;
     onSend(trimmed);
-    setValue("");
+    setDraft("");
     if (textareaRef.current) textareaRef.current.style.height = "auto";
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -60,7 +83,7 @@ export function InputBar({
   };
 
   const onChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setValue(event.target.value);
+    setDraft(event.target.value);
     const el = event.target;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
@@ -101,7 +124,7 @@ export function InputBar({
 
           <textarea
             ref={textareaRef}
-            value={value}
+            value={draft}
             onChange={onChange}
             onKeyDown={onKeyDown}
             rows={2}
@@ -187,7 +210,7 @@ export function InputBar({
                 <button
                   type="button"
                   onClick={submit}
-                  disabled={(value.trim().length === 0 && pendingFiles.length === 0) || disabled || pendingFiles.some((f) => f.loading)}
+                  disabled={(draft.trim().length === 0 && pendingFiles.length === 0) || disabled || pendingFiles.some((f) => f.loading)}
                   className={cn(
                     "h-8 w-8 flex items-center justify-center rounded-full bg-foreground text-background transition-colors",
                     "hover:bg-foreground/90",

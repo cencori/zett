@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import { resolve } from "node:path";
 import { existsSync } from "node:fs";
 import { loadAgent, loadAgentById, discoverAgents } from "../loader";
+import { transcribeAudio as transcribeVoice, synthesizeSpeech, type AudioAttachment } from "./voice";
 import { discoverAgent } from "../discover/index";
 import { streamAgent, type RunOptions } from "../runner/index";
 import { FileStore } from "../memory/file-store";
@@ -158,79 +159,34 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(payload);
 }
 
+function audioAttachment(name: string, mime: string, bytes: Buffer): AudioAttachment {
+  return { name, mime, bytes };
+}
+
 /** Cencori's STT accepts roughly 25 MB per file; refuse anything bigger. */
 export const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 
-function cencoriBaseUrl(): string {
-  return (
-    (process.env.CENCORI_API_URL ?? "https://cencori.com")
-      .replace(/\/api\/v1\/?$/, "")
-      .replace(/\/+$/, "")
-  );
-}
-
-/** Best-effort extraction of the platform's structured error message. */
-async function readError(res: Response): Promise<string> {
-  try {
-    const data = (await res.json()) as { error?: unknown };
-    // Prefer the human-readable `message`: `error` is often just a code
-    // like "provider_error" while `message` carries the upstream detail.
-    if (typeof data.error === "object" && data.error !== null) {
-      const message = (data.error as { message?: unknown }).message;
-      if (typeof message === "string") return message;
-    }
-    const topLevel = (data as { message?: unknown }).message;
-    if (typeof data.error === "string" && typeof topLevel !== "string" && data.error.length > 0) {
-      return data.error;
-    }
-    if (typeof topLevel === "string") return topLevel;
-  } catch {
-    // not JSON — fall through
-  }
-  return "";
-}
-
 /**
- * Transcribes an audio attachment through Cencori's first-party STT
- * (whisper-1). Returns a textual annotation that the model can reason
- * about — the widget's mic recordings, voice notes, and meeting uploads
- * all land here instead of the plain file placeholder.
+ * Transcribes an audio attachment to text — ElevenLabs Scribe when
+ * ELEVENLABS_API_KEY is set, else Cencori's whisper-1. Returns a textual
+ * annotation the model can reason about: the widget's mic recordings,
+ * voice notes, and meeting uploads all land here as text instead of a
+ * bare file placeholder.
  */
 async function transcribeAudio(f: InvokeFile): Promise<string> {
-  const apiKey = process.env.CENCORI_API_KEY;
-  if (!apiKey || apiKey === "local-dev-key") {
-    return `[Audio attached: ${f.name} — set CENCORI_API_KEY for transcription]`;
-  }
-
   const [header, base64] = f.dataUrl.slice(5).split(";base64,");
   const mimeType = header ?? "audio/mpeg";
   const bytes = Buffer.from(base64 ?? "", "base64");
   if (bytes.byteLength > MAX_AUDIO_BYTES) {
     return `[Audio attached: ${f.name} — too large to transcribe (${(bytes.byteLength / 1048576).toFixed(1)} MB, max 25 MB)]`;
   }
-
   try {
-    const form = new FormData();
-    form.append("file", new Blob([bytes], { type: mimeType }), f.name);
-    form.append("model", "whisper-1");
-    form.append("response_format", "json");
-    const res = await fetch(`${cencoriBaseUrl()}/api/ai/audio/transcriptions`, {
-      method: "POST",
-      signal: AbortSignal.timeout(60_000),
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: form,
-    });
-    if (!res.ok) {
-      const detail = await readError(res);
-      return `[Audio attached: ${f.name} — transcription failed (${res.status}${detail ? `: ${detail}` : ""})]`;
-    }
-    const data = (await res.json()) as { text?: string };
-    const text = (data.text ?? "").trim();
+    const { text, provider } = await transcribeVoice(audioAttachment(f.name, mimeType, bytes));
     return text.length > 0
-      ? `[Audio transcribed from ${f.name}]\n${text}`
+      ? `[Audio transcribed from ${f.name} — ${provider}]\n${text}`
       : `[Audio attached: ${f.name} — empty transcript]`;
-  } catch {
-    return `[Audio attached: ${f.name} — transcription API unreachable]`;
+  } catch (err) {
+    return `[Audio attached: ${f.name} — ${err instanceof Error ? err.message : "transcription failed"}]`;
   }
 }
 
@@ -243,7 +199,9 @@ async function transcribeAudio(f: InvokeFile): Promise<string> {
  */
 export async function describeFiles(files: InvokeFile[]): Promise<string> {
   const apiKey = process.env.CENCORI_API_KEY;
-  const base = cencoriBaseUrl();
+  const base = (process.env.CENCORI_API_URL ?? "https://cencori.com")
+    .replace(/\/api\/v1\/?$/, "")
+    .replace(/\/+$/, "");
 
   const parts = await Promise.all(
     files.map(async (f) => {
@@ -484,10 +442,10 @@ export function contractRequestHandler(
   };
 
   /**
-   * Synthesizes speech from text via Cencori's first-party TTS and returns
-   * the audio bytes. A convenience route for the widget's "speak" button —
-   * deliberately outside the Runtime Contract slots, so the platform can
-   * ignore it while the widget may use it.
+   * Synthesizes speech from text — ElevenLabs when ELEVENLABS_API_KEY is
+   * set, else Cencori's tts-1 — and returns the audio bytes. A convenience
+   * route for the widget's "speak" button, deliberately outside the
+   * Runtime Contract slots so the platform can ignore it freely.
    */
   const speech = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     let body: { input?: string; voice?: string; format?: string };
@@ -504,43 +462,65 @@ export function contractRequestHandler(
       return;
     }
 
-    const apiKey = process.env.CENCORI_API_KEY;
-    if (!apiKey || apiKey === "local-dev-key") {
-      sendJson(res, 500, { error: "CENCORI_API_KEY is not set — speech synthesis unavailable" });
-      return;
-    }
-
     try {
-      const tts = await fetch(`${cencoriBaseUrl()}/api/ai/audio/speech`, {
-        method: "POST",
-        signal: AbortSignal.timeout(60_000),
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          input,
-          model: "tts-1",
-          ...(body.voice ? { voice: body.voice } : {}),
-          ...(body.format ? { response_format: body.format } : {}),
-        }),
+      const { bytes, mime } = await synthesizeSpeech({
+        text: input,
+        ...(body.voice ? { voice: body.voice } : {}),
+        ...(body.format ? { format: body.format } : {}),
       });
-      if (!tts.ok) {
-        const detail = await readError(tts);
-        sendJson(res, 502, { error: `Cencori TTS error (${tts.status}${detail ? `: ${detail}` : ""})` });
-        return;
-      }
-      const audio = Buffer.from(await tts.arrayBuffer());
-      const contentType = tts.headers.get("content-type") ?? "audio/mpeg";
       res.writeHead(200, {
-        "Content-Type": contentType,
-        "Content-Length": audio.byteLength,
+        "Content-Type": mime,
+        "Content-Length": bytes.byteLength,
         "Cache-Control": "no-cache, no-transform",
       });
-      res.end(audio);
+      res.end(bytes);
     } catch (err) {
       if (!res.headersSent) {
         sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
       } else {
         res.end();
       }
+    }
+  };
+
+  /**
+   * Converts an audio upload to text — ElevenLabs Scribe when the key is
+   * set, else Cencori's whisper-1. The widget's mic button uses this so
+   * voice arrives as an editable text draft rather than a raw audio
+   * attachment. Convenience route, like /speech.
+   */
+  const transcribe = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    let body: { name?: string; type?: string; dataUrl?: string };
+    try {
+      body = JSON.parse(await readBody(req)) as { name?: string; type?: string; dataUrl?: string };
+    } catch {
+      sendJson(res, 400, { error: "invalid JSON body" });
+      return;
+    }
+
+    const dataUrl = body.dataUrl ?? "";
+    if (!dataUrl.startsWith("data:")) {
+      sendJson(res, 400, { error: "dataUrl is required" });
+      return;
+    }
+
+    const [header, base64] = dataUrl.slice(5).split(";base64,");
+    const mimeType = header ?? "audio/mpeg";
+    const bytes = Buffer.from(base64 ?? "", "base64");
+    if (bytes.byteLength === 0) {
+      sendJson(res, 400, { error: "empty audio payload" });
+      return;
+    }
+    if (bytes.byteLength > MAX_AUDIO_BYTES) {
+      sendJson(res, 413, { error: `audio too large (${(bytes.byteLength / 1048576).toFixed(1)} MB, max 25 MB)` });
+      return;
+    }
+
+    try {
+      const { text, provider } = await transcribeVoice(audioAttachment(body.name ?? "voice", mimeType, bytes));
+      sendJson(res, 200, { text, provider });
+    } catch (err) {
+      sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
     }
   };
 
@@ -569,6 +549,12 @@ export function contractRequestHandler(
     // Convenience for the widget's speak button — not part of the RC.
     if (method === "POST" && pathname === "/speech") {
       await speech(req, res);
+      return true;
+    }
+
+    // Convenience for the widget's mic button (audio → text) — not part of the RC.
+    if (method === "POST" && pathname === "/transcribe") {
+      await transcribe(req, res);
       return true;
     }
 

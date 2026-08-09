@@ -13,6 +13,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   delete process.env.CENCORI_API_KEY;
   delete process.env.CENCORI_API_URL;
+  delete process.env.ELEVENLABS_API_KEY;
 });
 
 function audioFile(base64: string, name = "voice-note.webm", type = "audio/webm") {
@@ -52,13 +53,31 @@ describe("describeFiles — audio transcription", () => {
     expect(url).toBe("https://cencori.com/api/ai/audio/transcriptions");
   });
 
+  it("prefers ElevenLabs Scribe when ELEVENLABS_API_KEY is set", async () => {
+    vi.stubEnv("ELEVENLABS_API_KEY", "el_test");
+    vi.stubEnv("CENCORI_API_KEY", "csk_test");
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ text: "transcribed by scribe" }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const out = await describeFiles([audioFile("YXVkaW8=")]);
+
+    expect(out).toContain("transcribed by scribe");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.elevenlabs.io/speech-to-text");
+    expect((init.headers as Record<string, string>)["xi-api-key"]).toBe("el_test");
+    expect((init.body as FormData).get("model_id")).toBe("scribe_v1");
+  });
+
   it("falls back to a placeholder without an API key", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
     const out = await describeFiles([audioFile("YXVkaW8=")]);
 
-    expect(out).toContain("set CENCORI_API_KEY for transcription");
+    expect(out).toContain("no transcription provider configured");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -179,6 +198,102 @@ describe("POST /speech", () => {
     const handled = await handler(post("/invoke", {}), fake.res);
 
     expect(handled).toBe(true);
+    expect(fake.status()).toBe(400);
+  });
+});
+
+describe("POST /transcribe", () => {
+  function fakeResponse() {
+    const chunks: Buffer[] = [];
+    let status = 200;
+    return {
+      res: {
+        headersSent: false,
+        writeHead: (s: number) => {
+          status = s;
+        },
+        write: (c: unknown) => {
+          chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(String(c)));
+        },
+        end: (c?: unknown) => {
+          if (c !== undefined) {
+            chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(String(c)));
+          }
+        },
+      },
+      status: () => status,
+      json: () => JSON.parse(Buffer.concat(chunks).toString()),
+    };
+  }
+
+  function post(body: unknown) {
+    const req = Readable.from([Buffer.from(JSON.stringify(body))]) as unknown as {
+      method: string;
+      url: string;
+      headers: Record<string, string>;
+    } & Readable;
+    req.method = "POST";
+    req.url = "/transcribe";
+    req.headers = { "content-type": "application/json" };
+    return req;
+  }
+
+  it("transcribes mic audio via ElevenLabs when its key is set", async () => {
+    vi.stubEnv("ELEVENLABS_API_KEY", "el_test");
+    vi.stubEnv("CENCORI_API_KEY", "csk_test");
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ text: "mic transcript" }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const handler = contractRequestHandler({ agentDir: FIXTURE });
+    const fake = fakeResponse();
+    const handled = await handler(
+      post({ name: "voice-note.webm", type: "audio/webm", dataUrl: `data:audio/webm;base64,${Buffer.from("audio").toString("base64")}` }),
+      fake.res,
+    );
+
+    expect(handled).toBe(true);
+    expect(fake.status()).toBe(200);
+    expect(fake.json()).toMatchObject({ text: "mic transcript", provider: "elevenlabs" });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.elevenlabs.io/speech-to-text");
+  });
+
+  it("falls back to Cencori whisper-1 without an ElevenLabs key", async () => {
+    vi.stubEnv("CENCORI_API_KEY", "csk_test");
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ text: "cencori transcript" }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const handler = contractRequestHandler({ agentDir: FIXTURE });
+    const fake = fakeResponse();
+    await handler(post({ name: "v", type: "audio/webm", dataUrl: "data:audio/webm;base64,eA==" }), fake.res);
+
+    expect(fake.status()).toBe(200);
+    expect(fake.json()).toMatchObject({ text: "cencori transcript", provider: "cencori" });
+  });
+
+  it("errors when no provider is configured", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const handler = contractRequestHandler({ agentDir: FIXTURE });
+    const fake = fakeResponse();
+    await handler(post({ type: "audio/webm", dataUrl: "data:audio/webm;base64,eA==" }), fake.res);
+
+    expect(fake.status()).toBe(500);
+    expect(fake.json().error).toContain("no transcription provider configured");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects when dataUrl is missing", async () => {
+    vi.stubEnv("CENCORI_API_KEY", "csk_test");
+    const handler = contractRequestHandler({ agentDir: FIXTURE });
+    const fake = fakeResponse();
+    await handler(post({ type: "audio/webm" }), fake.res);
+
     expect(fake.status()).toBe(400);
   });
 });

@@ -14,12 +14,14 @@ function resolveInside(root: string, rel: string): string {
 
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 
+const CENCORI_BASE = (process.env.CENCORI_API_URL ?? "https://cencori.com")
+  .replace(/\/api\/v1\/?$/, "")
+  .replace(/\/+$/, "");
+
 /** Best-effort extraction of the platform's structured error message. */
 async function readError(res: Response): Promise<string> {
   try {
     const data = (await res.json()) as { error?: unknown; message?: unknown };
-    // Prefer the human-readable `message`: `error` is often just a code
-    // like "provider_error" while `message` carries the upstream detail.
     if (typeof data.error === "object" && data.error !== null) {
       const message = (data.error as { message?: unknown }).message;
       if (typeof message === "string") return message;
@@ -32,24 +34,62 @@ async function readError(res: Response): Promise<string> {
   return "";
 }
 
-const BASE = (process.env.CENCORI_API_URL ?? "https://cencori.com")
-  .replace(/\/api\/v1\/?$/, "")
-  .replace(/\/+$/, "");
+async function transcribeWith(bytes: Buffer, mime: string, filename: string, language?: string, prompt?: string): Promise<string> {
+  const elevenKey = process.env.ELEVENLABS_API_KEY;
+  const cencoriKey = process.env.CENCORI_API_KEY;
+
+  if (elevenKey) {
+    const form = new FormData();
+    form.append("file", new Blob([bytes], { type: mime }), filename);
+    form.append("model_id", "scribe_v1");
+    if (language) form.append("language_code", language);
+    const res = await fetch("https://api.elevenlabs.io/speech-to-text", {
+      method: "POST",
+      signal: AbortSignal.timeout(120_000),
+      headers: { "xi-api-key": elevenKey },
+      body: form,
+    });
+    if (!res.ok) {
+      const detail = await readError(res);
+      throw new Error(`ElevenLabs STT error (${res.status}${detail ? `: ${detail}` : ""})`);
+    }
+    const data = (await res.json()) as { text?: string };
+    return (data.text ?? "").trim();
+  }
+
+  if (cencoriKey) {
+    const form = new FormData();
+    form.append("file", new Blob([bytes], { type: mime }), filename);
+    form.append("model", "whisper-1");
+    form.append("response_format", "json");
+    if (language) form.append("language", language);
+    if (prompt) form.append("prompt", prompt);
+    const res = await fetch(`${CENCORI_BASE}/api/ai/audio/transcriptions`, {
+      method: "POST",
+      signal: AbortSignal.timeout(120_000),
+      headers: { Authorization: `Bearer ${cencoriKey}` },
+      body: form,
+    });
+    if (!res.ok) {
+      const detail = await readError(res);
+      throw new Error(`Cencori STT error (${res.status}${detail ? `: ${detail}` : ""})`);
+    }
+    const data = (await res.json()) as { text?: string };
+    return (data.text ?? "").trim();
+  }
+
+  throw new Error("no transcription provider configured — set ELEVENLABS_API_KEY or CENCORI_API_KEY");
+}
 
 export default defineTool({
   description:
-    "Transcribe an audio file (voice note, recording, meeting) to text. Uses Cencori's first-party speech-to-text (whisper-1) with the existing CENCORI_API_KEY — no extra key. Files up to 25 MB.",
+    "Transcribe an audio file (voice note, recording, meeting) to text. Uses ElevenLabs Scribe when ELEVENLABS_API_KEY is set, otherwise Cencori's whisper-1 (CENCORI_API_KEY). Files up to 25 MB.",
   inputSchema: z.object({
     filePath: z.string().describe("Relative path to the audio file from the project root, e.g. 'voice-notes/note.m4a', 'uploads/call.wav'"),
     language: z.string().optional().describe("ISO language code of the audio, e.g. 'en'"),
-    prompt: z.string().optional().describe("Optional context to guide transcription, e.g. domain terms or speaker names"),
+    prompt: z.string().optional().describe("Optional context to guide transcription, e.g. domain terms or speaker names (Cencori provider only)"),
   }),
   execute: async ({ filePath, language, prompt }) => {
-    const apiKey = process.env.CENCORI_API_KEY;
-    if (!apiKey) {
-      return { file: filePath, error: "CENCORI_API_KEY is not set — cannot transcribe." };
-    }
-
     let abs: string;
     try {
       abs = resolveInside(process.cwd(), filePath);
@@ -70,26 +110,14 @@ export default defineTool({
     }
 
     try {
-      const bytes = readFileSync(abs);
-      const form = new FormData();
-      form.append("file", new Blob([bytes]), basename(filePath));
-      form.append("model", "whisper-1");
-      form.append("response_format", "json");
-      if (language) form.append("language", language);
-      if (prompt) form.append("prompt", prompt);
-
-      const res = await fetch(`${BASE}/api/ai/audio/transcriptions`, {
-        method: "POST",
-        signal: AbortSignal.timeout(120_000),
-        headers: { Authorization: `Bearer ${apiKey}` },
-        body: form,
-      });
-      if (!res.ok) {
-        const detail = await readError(res);
-        return { file: filePath, error: `Transcription failed (${res.status})${detail ? `: ${detail}` : "."}` };
-      }
-      const data = (await res.json()) as { text?: string };
-      return { file: filePath, text: (data.text ?? "").trim() };
+      const text = await transcribeWith(
+        readFileSync(abs),
+        "audio/mpeg",
+        basename(filePath),
+        language,
+        prompt,
+      );
+      return { file: filePath, text };
     } catch (err) {
       return { file: filePath, error: err instanceof Error ? err.message : "Transcription failed." };
     }

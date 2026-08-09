@@ -69,6 +69,8 @@ export interface ChatProps {
   agentsEndpoint?: string;
   /** URL synthesizing speech for the speak button. When absent, the button is hidden. */
   speechEndpoint?: string;
+  /** URL converting audio uploads to text for the mic button. Defaults to `/transcribe`. */
+  transcribeEndpoint?: string;
   /** Agent id to start on (and send with each turn when not "agent"). */
   initialAgentId?: string;
 }
@@ -77,6 +79,7 @@ export function Chat({
   endpoint = "/invoke",
   agentsEndpoint,
   speechEndpoint,
+  transcribeEndpoint = "/transcribe",
   initialAgentId = "agent",
 }: ChatProps = {}) {
   const [messages, setMessages] = React.useState<UiMessage[]>([]);
@@ -94,6 +97,8 @@ export function Chat({
   const [micError, setMicError] = React.useState<string | undefined>(undefined);
   const recorderRef = React.useRef<MediaRecorder | undefined>(undefined);
   const micStreamRef = React.useRef<MediaStream | undefined>(undefined);
+  const [draft, setDraft] = React.useState("");
+  const [draftFocusToken, setDraftFocusToken] = React.useState(0);
 
   React.useEffect(() => {
     const el = containerRef.current;
@@ -376,9 +381,9 @@ export function Chat({
   }, []);
 
   /**
-   * Mic toggle: records via MediaRecorder and drops the result into the
-   * pending-file row like any other attachment, so it flows through the
-   * normal /invoke upload path (the server transcribes it).
+   * Mic toggle: records via MediaRecorder, then converts the recording to
+   * text before anything is sent — the transcript lands as an editable
+   * draft the user reviews and sends. Raw audio is never attached.
    */
   const toggleMic = React.useCallback(async () => {
     if (micActive) {
@@ -400,19 +405,53 @@ export function Chat({
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunks.push(e.data);
       };
-      recorder.onstop = () => {
+      recorder.onstop = async () => {
         micStreamRef.current?.getTracks().forEach((t) => t.stop());
         micStreamRef.current = undefined;
         recorderRef.current = undefined;
         setMicActive(false);
+
         const type = mimeType || "audio/webm";
         const blob = new Blob(chunks, { type });
-        const recorded = new File(
-          [blob],
-          `voice-note.${type.includes("mp4") ? "m4a" : "webm"}`,
-          { type },
-        );
-        onFilesSelected([recorded]);
+        if (blob.size === 0) return;
+
+        const chipId = newId("f");
+        setPendingFiles((prev) => [
+          ...prev,
+          { id: chipId, name: "Transcribing…", type, dataUrl: "", size: 0, loading: true },
+        ]);
+        try {
+          const base64 = await new Promise<string>((resolvePromise, reject) => {
+            const reader = new FileReader();
+            reader.onload = () =>
+              resolvePromise(String(reader.result ?? "").split(",")[1] ?? "");
+            reader.onerror = () => reject(new Error("Failed to read recording"));
+            reader.readAsDataURL(blob);
+          });
+          const res = await fetch(transcribeEndpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: `voice-note.${type.includes("mp4") ? "m4a" : "webm"}`,
+              type,
+              dataUrl: `data:${type};base64,${base64}`,
+            }),
+          });
+          if (!res.ok) {
+            const err = (await res.json().catch(() => null)) as { error?: string } | null;
+            throw new Error(err?.error ?? `Transcription failed (${res.status})`);
+          }
+          const { text } = (await res.json()) as { text: string };
+          setDraft((prev) => {
+            const next = prev.trim();
+            return next.length > 0 ? `${next}\n${text}` : text;
+          });
+          setDraftFocusToken((t) => t + 1);
+        } catch (err) {
+          setMicError(err instanceof Error ? err.message : "Transcription failed.");
+        } finally {
+          setPendingFiles((prev) => prev.filter((p) => p.id !== chipId));
+        }
       };
       micStreamRef.current = stream;
       recorderRef.current = recorder;
@@ -425,7 +464,7 @@ export function Chat({
           : "Microphone unavailable.",
       );
     }
-  }, [micActive, onFilesSelected]);
+  }, [micActive, transcribeEndpoint]);
 
   const send = React.useCallback(
     async (text: string, historyOverride?: UiMessage[]) => {
@@ -560,6 +599,9 @@ export function Chat({
         onRemoveFile={removePendingFile}
         onMic={() => void toggleMic()}
         micActive={micActive}
+        value={draft}
+        onValueChange={setDraft}
+        focusToken={draftFocusToken}
       />
       {micError !== undefined && (
         <div className="flex items-center justify-center gap-1.5 px-4 pb-3 text-xs text-destructive">
