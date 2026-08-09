@@ -16,9 +16,6 @@ const CENCORI_BASE = (process.env.CENCORI_API_URL ?? "https://cencori.com")
   .replace(/\/api\/v1\/?$/, "")
   .replace(/\/+$/, "");
 
-/** Default ElevenLabs voice when none is supplied. */
-const DEFAULT_ELEVEN_VOICE = "21m00Tcm4TlvDq8ikWAM";
-
 /** Best-effort extraction of the platform's structured error message. */
 async function readError(res: Response): Promise<string> {
   try {
@@ -35,73 +32,38 @@ async function readError(res: Response): Promise<string> {
   return "";
 }
 
-async function speak(text: string, voice?: string): Promise<{ bytes: Buffer; mime: string }> {
-  const elevenKey = process.env.ELEVENLABS_API_KEY;
-  const cencoriKey = process.env.CENCORI_API_KEY;
-
-  if (elevenKey) {
-    const res = await fetch(
-      `https://api.elevenlabs.io/text-to-speech/${encodeURIComponent(voice ?? DEFAULT_ELEVEN_VOICE)}`,
-      {
-        method: "POST",
-        signal: AbortSignal.timeout(60_000),
-        headers: {
-          "xi-api-key": elevenKey,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          text,
-          model_id: "eleven_multilingual_v2",
-          output_format: "mp3_44100_128",
-          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
-        }),
-      },
-    );
-    if (!res.ok) {
-      const detail = await readError(res);
-      throw new Error(`ElevenLabs TTS error (${res.status}${detail ? `: ${detail}` : ""})`);
-    }
-    return { bytes: Buffer.from(await res.arrayBuffer()), mime: "audio/mpeg" };
-  }
-
-  if (cencoriKey) {
-    const res = await fetch(`${CENCORI_BASE}/api/ai/audio/speech`, {
-      method: "POST",
-      signal: AbortSignal.timeout(60_000),
-      headers: {
-        Authorization: `Bearer ${cencoriKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        input: text,
-        model: "tts-1",
-        ...(voice ? { voice } : {}),
-      }),
-    });
-    if (!res.ok) {
-      const detail = await readError(res);
-      throw new Error(`Cencori TTS error (${res.status}${detail ? `: ${detail}` : ""})`);
-    }
-    return {
-      bytes: Buffer.from(await res.arrayBuffer()),
-      mime: res.headers.get("content-type") ?? "audio/mpeg",
-    };
-  }
-
-  throw new Error("no speech provider configured — set ELEVENLABS_API_KEY or CENCORI_API_KEY");
-}
-
 export default defineTool({
   description:
-    "Synthesize speech from text. Uses ElevenLabs (eleven_multilingual_v2, high-quality voices) when ELEVENLABS_API_KEY is set, otherwise Cencori's tts-1 (CENCORI_API_KEY). Writes an mp3 file and returns its path. Use for spoken replies, voice notes, or narration.",
+    "Synthesize speech from text via Cencori's tts-1 (CENCORI_API_KEY). Writes an mp3 file and returns its path. Use for spoken replies, voice notes, or narration.",
   inputSchema: z.object({
     text: z.string().describe("The text to speak"),
-    voice: z.string().optional().describe("ElevenLabs voice id (provider-specific)"),
+    voice: z.string().optional().describe("Cencori voice name (OpenAI-compatible); a provider default applies when omitted"),
     outputPath: z.string().optional().describe("Where to write the audio file, relative to the project root (default: voice-notes/<timestamp>.mp3)"),
   }),
   execute: async ({ text, voice, outputPath }) => {
     try {
-      const { bytes, mime } = await speak(text, voice);
+      const apiKey = process.env.CENCORI_API_KEY;
+      if (!apiKey) {
+        return { error: "No CENCORI_API_KEY configured." };
+      }
+      const res = await fetch(`${CENCORI_BASE}/api/ai/audio/speech`, {
+        method: "POST",
+        signal: AbortSignal.timeout(60_000),
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          input: text,
+          model: "tts-1",
+          ...(voice ? { voice } : {}),
+        }),
+      });
+      if (!res.ok) {
+        const detail = await readError(res);
+        throw new Error(`TTS error (${res.status}${detail ? `: ${detail}` : ""})`);
+      }
+      const bytes = Buffer.from(await res.arrayBuffer());
       if (bytes.byteLength === 0) {
         return { error: "Speech synthesis returned empty audio." };
       }
@@ -115,7 +77,7 @@ export default defineTool({
       return {
         path: out,
         bytes: bytes.byteLength,
-        format: mime,
+        format: res.headers.get("content-type") ?? "audio/mpeg",
       };
     } catch (err) {
       return { error: err instanceof Error ? err.message : "Speech synthesis failed." };

@@ -167,11 +167,10 @@ function audioAttachment(name: string, mime: string, bytes: Buffer): AudioAttach
 export const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 
 /**
- * Transcribes an audio attachment to text — ElevenLabs Scribe when
- * ELEVENLABS_API_KEY is set, else Cencori's whisper-1. Returns a textual
- * annotation the model can reason about: the widget's mic recordings,
- * voice notes, and meeting uploads all land here as text instead of a
- * bare file placeholder.
+ * Transcribes an audio attachment to text via Cencori's whisper-1. Returns
+ * a textual annotation the model can reason about: the widget's mic
+ * recordings, voice notes, and meeting uploads all land here as text
+ * instead of a bare file placeholder.
  */
 async function transcribeAudio(f: InvokeFile): Promise<string> {
   const [header, base64] = f.dataUrl.slice(5).split(";base64,");
@@ -442,10 +441,10 @@ export function contractRequestHandler(
   };
 
   /**
-   * Synthesizes speech from text — ElevenLabs when ELEVENLABS_API_KEY is
-   * set, else Cencori's tts-1 — and returns the audio bytes. A convenience
-   * route for the widget's "speak" button, deliberately outside the
-   * Runtime Contract slots so the platform can ignore it freely.
+   * Synthesizes speech from text via Cencori's tts-1 and returns the
+   * audio bytes. A convenience route for the widget's "speak" button,
+   * deliberately outside the Runtime Contract slots so the platform can
+   * ignore it freely.
    */
   const speech = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     let body: { input?: string; voice?: string; format?: string };
