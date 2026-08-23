@@ -17,20 +17,21 @@ export const extractJson = (raw: string): string =>
 export const pickWord = (words: string[]): string =>
 	words[Math.floor(Math.random() * words.length)]!;
 
-export const isValidDecision = (value: unknown): value is boolean | Error => {
+export const isValidDecision = (value: unknown): value is boolean => {
 	const result = toolDecisionSchema.safeParse(value);
 
 	if (result.success) {
 		return true;
 	} else {
 		throw result.error.format();
+		return false;
 	}
 };
 
 export const isValidFileAction = (value: unknown): value is FileAction => {
 	const result = fileActionSchema.safeParse(value);
 	if (result.success) {
-		return true;
+		return result.data;
 	} else {
 		throw result.error.format();
 	}
@@ -39,7 +40,7 @@ export const isValidFileAction = (value: unknown): value is FileAction => {
 export const isValidActionPlan = (value: unknown): value is ActionPlan => {
 	const result = actionPlanSchema.safeParse(value);
 	if (result.success) {
-		return true;
+		return result.data;
 	} else {
 		throw result.error.format();
 	}

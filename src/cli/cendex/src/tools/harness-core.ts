@@ -32,7 +32,9 @@ import {
 // ---------------------------------------------------------------------------
 // Constants & Types
 // ---------------------------------------------------------------------------
-async function loadRepoContext(localDir: string) {
+const loadRepoContext = async (
+	localDir: string,
+): { repoMap: string; repoContextString: string } => {
 	const mapId = Bun.env.REPO_MAP_ID as string;
 	const baseId = Bun.env.BASECODE_README_ID as string;
 
@@ -59,7 +61,7 @@ async function loadRepoContext(localDir: string) {
 	}
 
 	return { repoMap, repoContextString };
-}
+};
 
 async function* resolveToolDecision(
 	taskDescription: string,
@@ -75,7 +77,7 @@ async function* resolveToolDecision(
 			model: modelId,
 			messages: [
 				{ role: "system", content: buildToolDecisionPrompt(repoMap) },
-				...priorMessages.slice(-5),
+				...priorMessages.slice(-10),
 				{
 					role: "user",
 					content: feedback
@@ -297,3 +299,4 @@ ${actionsLog.length ? `### ACTIONS TAKEN\n${actionsLog.map((a) => `- ${a.type} $
 		updateThinkingWord?.();
 	}
 }
+
