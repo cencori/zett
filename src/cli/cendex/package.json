@@ -13,14 +13,21 @@
 		"typescript": "^5"
 	},
 	"dependencies": {
+		"@ai-sdk/harness-codex": "^1.0.75",
+		"@ai-sdk/sandbox-just-bash": "^1.0.73",
+		"@openai/codex": "^0.147.0",
+		"@openai/codex-sdk": "^0.147.0",
 		"@opentui/core": "^0.5.1",
 		"@opentui/keymap": "^0.5.1",
 		"@opentui/react": "^0.5.1",
 		"@types/react": "^19.2.18",
+		"ai": "^7.0.66",
 		"axios": "^1.19.0",
 		"cencori": "^1.6.1",
+		"express": "^5.2.1",
 		"opentui-spinner": "^0.0.7",
 		"react": "^19.2.8",
-		"react-router": "^8.3.0"
+		"react-router": "^8.3.0",
+		"zod": "^4.4.3"
 	}
 }

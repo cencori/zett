@@ -2,51 +2,17 @@ import { theme } from "../../../theme";
 import Message, { type MessageType } from "../../components/Message";
 import InputBar from "../../components/InputBar";
 import { useLocation } from "react-router";
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import {
 	useModels,
 	type ModelContextValue,
 } from "../../providers/ModelProvider";
 
 import Header from "../../components/Header";
-const THINKING_WORDS = [
-	"Marinating",
-	"Percolating",
-	"Noodling",
-	"Vibing",
-	"Ruminating",
-	"Spelunking",
-	"Untangling",
-	"Wrangling",
-	"Divining",
-	"Conjuring",
-	"Puzzling",
-	"Simmering",
-	"Rummaging",
-	"Excavating",
-	"Bikeshedding",
-	"Overthinking",
-	"Channeling",
-	"Summoning",
-	"Fermenting",
-	"Coalescing",
-	"Vibrating",
-	"Percolating",
-	"Brewing",
-	"Loitering",
-	"Deliberating",
-	"Cogitating",
-	"Scheming",
-] as const;
-
-const getRandomThinkingWord = (): string => {
-	const index = Math.floor(Math.random() * THINKING_WORDS.length);
-	return THINKING_WORDS[index] as string;
-};
 
 const NewSession = () => {
 	const location = useLocation();
-	const { setSessionMessages, sessionMessages, respLoading } =
+	const { setSessionMessages, sessionMessages, respLoading, thinkingWord } =
 		useModels() as ModelContextValue;
 
 	useEffect(() => {
@@ -58,7 +24,7 @@ const NewSession = () => {
 			{
 				msg: initialQuery,
 				type: "user",
-				id: sessionMessages.length + 1,
+				id: prev.length + 1,
 			},
 		]);
 	}, [location.state?.query, setSessionMessages]);
@@ -71,7 +37,7 @@ const NewSession = () => {
 			{
 				msg: data.query,
 				type: "user",
-				id: crypto.randomUUID(),
+				id: sessionMessages.length + 1,
 			},
 		]);
 	};
@@ -106,7 +72,7 @@ const NewSession = () => {
 							gap={1}
 						>
 							<spinner name="dots" color="#737373" />
-							<text fg="#737373">{getRandomThinkingWord()}</text>
+							<text fg="#737373">{thinkingWord}</text>
 						</box>
 					)}
 				</box>

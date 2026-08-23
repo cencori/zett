@@ -10,6 +10,11 @@ import {
 	useDialog,
 	type DialogContextValue,
 } from "../../providers/DialogProvider";
+import {
+	useModels,
+	type ModelContextValue,
+} from "../../providers/ModelProvider";
+import { useToast } from "../../providers/ToastProvider";
 
 const index = ({ action }: { action: (data?: any) => void }) => {
 	const [placeHolderText, setPlaceHolder] = useState<string>(
@@ -23,11 +28,15 @@ const index = ({ action }: { action: (data?: any) => void }) => {
 	const placeHolderTexts = useRef([
 		`Try "Analyze this codebase`,
 		`Integrate cencori MCP`,
-		`Press "q" to quit`,
+		`Press "ctrl + q" to quit`,
 		`Tokenmaxxing szn?`,
+		`Press "ctrl + space" to interrupt`,
 	]);
 	const [scrollBoxIndex, setScrollBoxIndex] = useState<number>(0);
 	const textareaInputRef = useRef<TextareaRenderable>(null);
+	const { setRespLoading, interruptedStatusRef } =
+		useModels() as ModelContextValue;
+	const toast = useToast();
 
 	useBindings(
 		() => ({
@@ -48,8 +57,21 @@ const index = ({ action }: { action: (data?: any) => void }) => {
 						renderer.destroy();
 					},
 				},
+				{
+					name: "interrupt",
+					run: () => {
+						if (textareaInputRef.current?.plainText.trim() === "") {
+							setRespLoading(false);
+							interruptedStatusRef.current = true;
+							toast?.show("Thinking Interrupted!", "notification!");
+						}
+					},
+				},
 			],
-			bindings: [{ key: "q", cmd: "quit" }],
+			bindings: [
+				{ key: "ctrl+q", cmd: "quit" },
+				{ key: "ctrl+space", cmd: "interrupt" },
+			],
 		}),
 		[currentDialog],
 	);
@@ -82,7 +104,7 @@ const index = ({ action }: { action: (data?: any) => void }) => {
 	return (
 		<box width="100%" alignItems="center">
 			<box width="100%">
-				<StatusBar mode="Planning" model="Claude Opus 4.6" />
+				<StatusBar mode="PLAN MODE" model="Claude Opus 4.6" />
 				<box width="100%" borderColor="#fff" border={["top", "bottom"]}>
 					<box paddingX={3} width="100%" gap={0.5}>
 						<box position="relative" justifyContent="center">
@@ -91,6 +113,7 @@ const index = ({ action }: { action: (data?: any) => void }) => {
 								<textarea
 									ref={textareaInputRef}
 									placeholder={placeHolderText}
+									placeholderColor={"#505050"}
 									onContentChange={() => {
 										setIsMenuEnable(
 											!!textareaInputRef.current?.plainText.startsWith("/"),
@@ -101,7 +124,6 @@ const index = ({ action }: { action: (data?: any) => void }) => {
 										}
 									}}
 									onSubmit={handleSubmit}
-									focused={!isMenuEnable}
 									width="100%"
 									keyBindings={
 										isMenuEnable || currentDialog

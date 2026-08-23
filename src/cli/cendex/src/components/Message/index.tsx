@@ -51,9 +51,10 @@ const index = ({ msg, type }: MessageType) => {
 						syntaxStyle={syntaxStyle}
 						conceal
 						width="100%"
+						streaming={true}
 					/>
 				) : (
-					<text>{msg}</text>
+					<text width="100%">{msg}</text>
 				)}
 			</box>
 		</box>

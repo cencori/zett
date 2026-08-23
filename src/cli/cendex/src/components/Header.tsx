@@ -1,10 +1,29 @@
 import path from "node:path";
-import { useModels } from "../providers/ModelProvider";
+import { useEffect, useState } from "react";
+import { userInfo } from "node:os";
 
 const index = () => {
 	const logoPath = path.join(__dirname, "../logo.jpeg");
+	const [dir, setDir] = useState<string | null>(null);
 
-	const { activeModel } = useModels();
+	const shortenPath = (
+		path: string,
+		username: string = userInfo().username,
+	): string => {
+		return path
+			.split("/")
+			.filter((segment) => segment !== "home" && segment !== username)
+			.join("/");
+	};
+
+	const setWorkingDir = async () => {
+		setDir(shortenPath(process.cwd()));
+	};
+
+	useEffect(() => {
+		setWorkingDir();
+	}, []);
+
 	return (
 		<box
 			flexDirection="row"
@@ -32,7 +51,7 @@ const index = () => {
 					<strong>Basecode v0.1.0</strong>
 				</text>
 				<text>Welcome to basecode by cencori!</text>
-				<text>~/arcie/</text>
+				{dir && <text>{`~${dir}`}</text>}
 			</box>
 		</box>
 	);

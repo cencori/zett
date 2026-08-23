@@ -8,6 +8,7 @@ import {
 	useModels,
 	type ModelContextValue,
 } from "../../providers/ModelProvider.tsx";
+import { writeToFile } from "../../tools/fileHandler.ts";
 
 interface ScrollablePickerProps {
 	models: Model[];
@@ -87,10 +88,18 @@ const ScrollablePicker = ({
 				},
 				{
 					name: "execute_command",
-					run: () => {
+					run: async () => {
 						const selected = filteredModels[scrollBoxIndex];
 						if (selected) {
 							toast?.show(`Switched to ${selected.name}`);
+							try {
+								await writeToFile(
+									Bun.env?.ACTIVE_MODEL as string,
+									JSON.stringify(selected),
+								);
+							} catch (e) {
+								toast?.show("Failed to persist storage", "error");
+							}
 							setActiveModel(selected);
 							dialog?.setDialog(null);
 						}
@@ -112,6 +121,7 @@ const ScrollablePicker = ({
 				ref={textareaInputRef}
 				placeholder={searchPlaceHolder}
 				padding={1}
+				placeholderColor={"#505050"}
 				onContentChange={() => {
 					const query =
 						(textareaInputRef.current?.plainText as string)?.toLowerCase() ??
@@ -123,7 +133,6 @@ const ScrollablePicker = ({
 					);
 				}}
 			/>
-
 			<scrollbox width="100%" height={MAX_VISIBLE_ITEMS} ref={scrollBoxRef}>
 				{!loading &&
 					filteredModels.map((model, indx) => {
