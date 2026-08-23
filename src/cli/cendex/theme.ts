@@ -22,7 +22,7 @@ export const theme = {
 		},
 		user: {
 			border: "#4ADE80",
-			background: "#1F2937",
+			background: "#262626",
 		},
 	},
 };

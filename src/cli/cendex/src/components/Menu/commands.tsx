@@ -5,7 +5,7 @@ import ScrollablePicker from "../ScrollablePicker";
 import { type Model } from "../../server/Models";
 import { useNavigate } from "react-router";
 import type { MessageType } from "../Message";
-import { runLocalMemoryAgentWithRepoContext } from "../../tools/harness-plugin-core";
+import { runLocalMemoryAgentWithRepoContext } from "../../tools/harness-core";
 
 type NavigateFunction = ReturnType<typeof useNavigate>;
 

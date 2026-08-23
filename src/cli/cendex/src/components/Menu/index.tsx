@@ -10,7 +10,7 @@ import { useNavigate } from "react-router";
 
 import { ModelContextValue } from "../../providers/ModelProvider";
 import type { MessageType } from "../Message";
-import { runLocalMemoryAgentWithRepoContext } from "../../tools/harness-plugin-core";
+import { runLocalMemoryAgentWithRepoContext } from "../../tools/harness-core";
 import { writeToFile } from "../../tools/fileHandler";
 
 const MAX_VALUE_WIDTH = Math.max(...Commands.map((cmd) => cmd.value.length));

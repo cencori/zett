@@ -1,4 +1,3 @@
-import { trace } from "console";
 import { theme } from "../../../theme";
 import { EmptyBorder } from "../InputBar/border";
 import { MarkdownRenderable, SyntaxStyle, RGBA } from "@opentui/core";

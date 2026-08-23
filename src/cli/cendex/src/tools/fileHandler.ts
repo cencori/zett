@@ -1,9 +1,9 @@
 import { promises as fs } from "fs";
 import { readdir } from "fs/promises";
 import { join, relative, extname } from "path";
-// fileHandler.ts
+
 const SECRET_FILE_PATTERNS = [
-	/^\.env(\..*)?$/, // .env, .env.local, .env.production
+	/^\.env(\..*)?$/,
 	/\.pem$/,
 	/\.key$/,
 	/^id_rsa/,
@@ -14,6 +14,7 @@ const SECRET_FILE_PATTERNS = [
 
 export const isSecretFile = (name: string): boolean =>
 	SECRET_FILE_PATTERNS.some((p) => p.test(name));
+
 const EXCLUDED_DIRS = new Set([
 	"node_modules",
 	".git",
@@ -100,10 +101,10 @@ export const readFromFile = async (filePath: string): Promise<string> => {
 	}
 };
 
-export async function scanRepository(
+export const scanRepository = async (
 	dir: string,
 	baseDir: string = dir,
-): Promise<Array<{ path: string; content: string }>> {
+): Promise<Array<{ path: string; content: string }>> => {
 	const entries = await readdir(dir, { withFileTypes: true });
 	let results: Array<{ path: string; content: string }> = [];
 
@@ -142,21 +143,22 @@ export async function scanRepository(
 				content,
 			});
 		} catch (e) {
-			// 2. Read a specific file
+			// Handle specific file read errors if needed
+			console.error(`Failed to read file ${fullPath}:`, e);
 		}
 	}
 
 	return results;
-}
+};
 
 export type RepoEntry =
 	| { path: string; type: "file" }
 	| { path: string; type: "directory"; children: RepoEntry[] };
 
-export async function scanRepositoryNames(
+export const scanRepositoryNames = async (
 	dir: string,
 	baseDir: string = dir,
-): Promise<RepoEntry[]> {
+): Promise<RepoEntry[]> => {
 	const entries = await readdir(dir, { withFileTypes: true });
 	let results: RepoEntry[] = [];
 
@@ -192,43 +194,77 @@ export async function scanRepositoryNames(
 	}
 
 	return results;
-}
+};
 
-export async function readFileContent(filePath: string): Promise<string> {
+// 6. Append content to a file — creates it if it doesn't exist yet,
+// otherwise appends. If you need "must already exist" semantics, check
+// file.exists() before calling this.
+export const appendFileContent = async (
+	filePath: string,
+	content: string,
+): Promise<void> => {
+	const file = Bun.file(filePath);
+	const existing = (await file.exists()) ? await file.text() : "";
+	await Bun.write(filePath, existing + content);
+};
+
+export const readFileContent = async (filePath: string): Promise<string> => {
 	const file = Bun.file(filePath);
 	if (!(await file.exists())) {
 		throw new Error(`File not found: ${filePath}`);
 	}
 	return await file.text();
-}
-
-// 3. Create or completely overwrite a file (automatically creates parent directories if needed)
-export async function writeFileContent(
-	filePath: string,
-	content: string,
-): Promise<void> {
-	await Bun.write(filePath, content);
-}
+};
 
 // 4. Edit/Update a file by replacing specific strings or lines
-export async function editFileContent(
+// NOTE: remember to extend this function to allow multi target edits
+export const editFileContent = async (
 	filePath: string,
 	target: string,
 	replacement: string,
-): Promise<void> {
+): Promise<void> => {
 	const file = Bun.file(filePath);
 	if (!(await file.exists())) {
 		throw new Error(`File not found: ${filePath}`);
 	}
-
 	const content = await file.text();
-	if (!content.includes(target)) {
+
+	// Count occurrences instead of a single includes() check — a plain
+	// includes() only tells you it's *present*, not that it's unique.
+	// String#replace only ever touches the first match, so if target
+	// appears more than once, you'd silently edit the wrong occurrence
+	// with no error surfaced.
+	const occurrences = content.split(target).length - 1;
+	if (occurrences === 0) {
 		throw new Error(`Target string not found in ${filePath}`);
+	}
+	if (occurrences > 1) {
+		throw new Error(
+			`Target string is not unique in ${filePath} (found ${occurrences} occurrences). ` +
+			`Include more surrounding context in "target" so it matches exactly one location.`,
+		);
 	}
 
 	const updatedContent = content.replace(target, replacement);
 	await Bun.write(filePath, updatedContent);
-}
+};
+
+// 5. Write a new file — fails if the path already exists, to avoid
+// silently clobbering something. Use writeFileContent(..., { overwrite: true })
+// if you explicitly want to replace an existing file.
+export const writeFileContent = async (
+	filePath: string,
+	content: string,
+	options: { overwrite?: boolean } = {},
+): Promise<void> => {
+	const file = Bun.file(filePath);
+	if (!options.overwrite && (await file.exists())) {
+		throw new Error(
+			`File already exists: ${filePath}. Pass { overwrite: true } to replace it.`,
+		);
+	}
+	await Bun.write(filePath, content);
+};
 
 export interface SearchResult {
 	path: string;

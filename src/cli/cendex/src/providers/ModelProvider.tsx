@@ -14,12 +14,13 @@ import {
 import type { MessageType } from "../components/Message";
 import type { ChatMessage } from "cencori";
 import { readFromFile } from "../tools/fileHandler";
-import {
-	runLocalMemoryAgentWithRepoContext,
-	updatePathData,
-} from "../tools/harness-plugin-core";
+
+import { runLocalMemoryAgentWithRepoContext } from "../tools/harness-core";
+import { updatePathData } from "../tools/harness-utils";
+
 import { useToast } from "./ToastProvider";
 import { useThinkingWord } from "../hooks/useThinkingWord";
+import type { ThinkingPhase } from "../hooks/useThinkingWord";
 
 export type ModelContextValue = {
 	models: Model[];
@@ -56,8 +57,18 @@ export const ModelProvider = ({ children }: { children: React.ReactNode }) => {
 	const isGeneratingRef = useRef<boolean>(false);
 	const interruptedStatusRef = useRef<boolean>(false);
 
-	const [word, advance] = useThinkingWord();
+	const [word, advance, switchPhase] = useThinkingWord();
 
+	const updateThinkingWord = useCallback(
+		(nextPhase?: ThinkingPhase, fixedWord?: string) => {
+			if (nextPhase) {
+				switchPhase(nextPhase, fixedWord);
+			} else {
+				advance(fixedWord);
+			}
+		},
+		[switchPhase, advance],
+	);
 	const mapMessagesToSession = useCallback(
 		(messages: MessageType[]): ChatMessage[] => {
 			return messages
@@ -124,7 +135,7 @@ export const ModelProvider = ({ children }: { children: React.ReactNode }) => {
 					taskDescription,
 					activeModel?.id as string,
 					mapMessagesToSession(sessionMessages),
-					advance,
+					updateThinkingWord,
 				);
 
 				let accumulated = "";
@@ -197,7 +208,13 @@ export const ModelProvider = ({ children }: { children: React.ReactNode }) => {
 			isGeneratingRef.current = false;
 			setRespLoading(false);
 		}
-	}, [sessionMessages, activeModel, mapMessagesToSession, isPlanMode, advance]);
+	}, [
+		sessionMessages,
+		activeModel,
+		mapMessagesToSession,
+		isPlanMode,
+		updateThinkingWord,
+	]);
 
 	// Effect 1: Handle fetching saved agent on mount
 	useEffect(() => {
@@ -235,6 +252,8 @@ export const ModelProvider = ({ children }: { children: React.ReactNode }) => {
 		) {
 			getModelResp();
 		}
+
+		updatePathData();
 	}, [sessionMessages, activeModel, getModelResp]);
 
 	return (

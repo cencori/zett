@@ -26,3 +26,30 @@ export const THINKING_WORDS = [
 	"Cogitating",
 	"Scheming",
 ] as const;
+
+/** Shown while deciding whether a tool call is needed. */
+export const TOOL_THINKING_WORDS = [
+	"Checking if a tool's needed",
+	"Weighing whether to read a file",
+	"Deciding if a peek is needed",
+	"Scanning for the right file",
+	"Considering a file read",
+	"Sizing up what's needed",
+	"Checking the repo map",
+	"Working out if context is missing",
+	"Sussing out what to read",
+	"Reconsidering whether to look closer",
+] as const;
+/** Shown once a tool has actually been picked and is being used. */
+export const TOOL_LEVERAGING_WORDS = [
+	"Activating",
+	"Leveraging",
+	"Engaging",
+	"Spinning up",
+	"Invoking",
+	"Firing up",
+	"Tapping into",
+	"Reaching for",
+	"Booting",
+	"Pulling in",
+] as const;

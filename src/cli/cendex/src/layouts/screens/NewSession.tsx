@@ -2,20 +2,18 @@ import { theme } from "../../../theme";
 import Message, { type MessageType } from "../../components/Message";
 import InputBar from "../../components/InputBar";
 import { useLocation } from "react-router";
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import {
 	useModels,
 	type ModelContextValue,
 } from "../../providers/ModelProvider";
 
 import Header from "../../components/Header";
-import { useThinkingWord } from "../../hooks/useThinkingWord";
 
 const NewSession = () => {
 	const location = useLocation();
 	const { setSessionMessages, sessionMessages, respLoading, thinkingWord } =
 		useModels() as ModelContextValue;
-	const [word] = useThinkingWord();
 
 	useEffect(() => {
 		const initialQuery = location.state?.query;
@@ -26,7 +24,7 @@ const NewSession = () => {
 			{
 				msg: initialQuery,
 				type: "user",
-				id: sessionMessages.length + 1,
+				id: prev.length + 1,
 			},
 		]);
 	}, [location.state?.query, setSessionMessages]);
