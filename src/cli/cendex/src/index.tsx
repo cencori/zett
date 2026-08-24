@@ -1,24 +1,32 @@
+import "opentui-spinner/react";
+
 import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
+import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 
-import { theme } from "../theme";
-import Header from "./components/Header";
-import InputBar from "./components/InputBar";
+import { createMemoryRouter, RouterProvider } from "react-router";
 
-function App() {
-	return (
-		<box
-			alignItems="center"
-			justifyContent="center"
-			flexGrow={1}
-			gap={3}
-			backgroundColor={theme.backgroundColor}
-		>
-			<Header />
-			<InputBar />
-		</box>
-	);
-}
+import RootLayout from "./layouts/RootLayout";
+import Home from "./layouts/screens/Home";
+import NewSession from "./layouts/screens/NewSession";
 
-const renderer = await createCliRenderer();
-createRoot(renderer).render(<App />);
+const router = createMemoryRouter([
+	{
+		path: "/",
+		element: <RootLayout />,
+		children: [
+			{
+				index: true,
+				element: <Home />,
+			},
+			{
+				path: "/new-session",
+				element: <NewSession />,
+			},
+		],
+	},
+]);
+const renderer = await createCliRenderer({ exitOnCtrlC: false });
+export const keymap = createDefaultOpenTuiKeymap(renderer);
+
+createRoot(renderer).render(<RouterProvider router={router} />);
