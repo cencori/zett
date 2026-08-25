@@ -1,0 +1,1 @@
+{"id":"gemini-2.5-flash","object":"model","owned_by":"google","name":"Gemini 2.5 Flash","type":["chat","reasoning"],"context_window":1000000,"description":"Thinking capabilities","created":1764523042}
